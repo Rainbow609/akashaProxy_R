@@ -2,6 +2,9 @@
 	path = module/clash/yacd
 	url = https://github.com/MetaCubeX/metacubexd
 	branch = main
+	shallow = true
+	ignore = all
+	update = none
 [submodule "Clash.Meta"]
 	path = Clash.Meta
 	url = https://github.com/MetaCubeX/mihomo
