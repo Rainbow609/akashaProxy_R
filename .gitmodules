@@ -1,10 +1,7 @@
 [submodule "module/clash/yacd"]
 	path = module/clash/yacd
 	url = https://github.com/MetaCubeX/metacubexd
-	branch = main
-	shallow = true
-	ignore = all
-	update = none
+	branch = releases/latest
 [submodule "Clash.Meta"]
 	path = Clash.Meta
 	url = https://github.com/MetaCubeX/mihomo
