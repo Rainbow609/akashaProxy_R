@@ -95,45 +95,39 @@ keep_dns() {
 }
 
 upgrade_clash() {
-    log "开始下载 ${Clash_bin_name} 内核 更新速度取决于你的网速..."
-    mkdir -p /data/clash/clashkernel/temp
-    general_clash_filename="mihomo-android-arm64-"
+    log "正在下载 ${Clash_bin_name} 内核..."
+    mkdir -p ${Clash_data_dir}/clashkernel/temp
+    remote_clash_ver=$1
+    general_clash_filename="mihomo-android-arm64-v8-"
     if [[ ${cgo} == "true" && ${go120} == "true" ]];then
-        unset remote_clash_ver
-        unset general_clash_filename
         echo "err: 目前无 cgo 和 go120 共存的 ${Clash_bin_name} 内核"
     elif [[ ${cgo} == "true" ]];then
         specific_clash_filename=${general_clash_filename}cgo-${remote_clash_ver}
-        unset remote_clash_ver
-        unset general_clash_filename
     elif [[ ${go120} == "true" ]];then
         specific_clash_filename=${general_clash_filename}go120-${remote_clash_ver}
-        unset remote_clash_ver
-        unset general_clash_filename
     else
         specific_clash_filename=${general_clash_filename}${remote_clash_ver}
-        unset remote_clash_ver
-        unset general_clash_filename
     fi
-
-    curl --connect-timeout 5 -Ls -o /data/clash/clashkernel/temp/clashMeta.gz "${ghproxy}/https://github.com/MetaCubeX/mihomo/releases/latest/download/${specific_clash_filename}.gz"
+    curl --connect-timeout 5 -Ls -o ${Clash_data_dir}/clashkernel/temp/clashMeta.gz "${ghproxy}/https://github.com/MetaCubeX/mihomo/releases/latest/download/${specific_clash_filename}.gz"
+    unset remote_clash_ver
+    unset general_clash_filename
     unset specific_clash_filename
 
-    if [ -f /data/clash/clashkernel/temp/clashMeta.gz ];then
-        ${busybox_path} gunzip -f /data/clash/clashkernel/temp/clashMeta.gz
-        if [ -f /data/clash/clashkernel/temp/clashMeta ];then
-            rm -f /data/clash/clashkernel/clashMeta
-            mv /data/clash/clashkernel/temp/clashMeta /data/clash/clashkernel/
-            rm -rf /data/clash/clashkernel/temp
-            chmod +x /data/clash/clashkernel/clashMeta
+    if [ -f ${Clash_data_dir}/clashkernel/temp/clashMeta.gz ];then
+        ${busybox_path} gunzip -f ${Clash_data_dir}/clashkernel/temp/clashMeta.gz
+        if [ -f ${Clash_data_dir}/clashkernel/temp/clashMeta ];then
+            rm -f ${Clash_data_dir}/clashkernel/clashMeta
+            mv ${Clash_data_dir}/clashkernel/temp/clashMeta ${Clash_data_dir}/clashkernel/
+            rm -rf ${Clash_data_dir}/clashkernel/temp
+            chmod +x ${Clash_data_dir}/clashkernel/clashMeta
             log "info: 更新完成"
         else
-            rm -rf /data/clash/clashkernel/temp
+            rm -rf ${Clash_data_dir}/clashkernel/temp
             log "err: 更新失败, 请自行前往 GitHub 项目地址下载 → https://github.com/MetaCubeX/mihomo/releases"
             return
         fi
     else
-        rm -rf /data/clash/clashkernel/temp
+        rm -rf ${Clash_data_dir}/clashkernel/temp
         log "err: 更新失败, 请自行前往 GitHub 项目地址下载 → https://github.com/MetaCubeX/mihomo/releases"
         return
     fi
@@ -147,7 +141,7 @@ check_clash_ver() {
     fi
     if [[ "${remote_clash_ver}" == "" ]];then
         unset remote_clash_ver
-        log "err: 网络连接失败或超过 API 速率限制"
+        log "err: 网络连接失败"
         return
     fi
 
@@ -161,13 +155,13 @@ check_clash_ver() {
         log "info: 当前为最新版: ${local_clash_ver}"
     elif [[ ${local_clash_ver} == "" ]];then
         log "err: 获取本地版本失败, 最新版为: ${remote_clash_ver}"
-        upgrade_clash
+        upgrade_clash $remote_clash_ver
         if [ "$?" = "0" ]; then
             flag=true
         fi
     else
         log "info: 本地版本为: ${local_clash_ver}, 最新版为: ${remote_clash_ver}"
-        upgrade_clash
+        upgrade_clash $remote_clash_ver
         if [ "$?" = "0" ]; then
             flag=true
         fi
@@ -195,6 +189,7 @@ update_file() {
 }
 
 find_packages_uid() {
+    rm -f ${appuid_file}
     rm -f ${appuid_file}.tmp
     hd=""
     if [ "${mode}" == "global" ]; then
@@ -217,6 +212,24 @@ find_packages_uid() {
             log "warn: Tproxy模式下fake-ip不可使用黑白名单."
             exit 1
         fi
+        if [ "$(grep ":" <<< ${package})" ];then
+            echo "${package}" >> ${appuid_file}
+            if [ "${mode}" = "blacklist" ]; then
+                log "info: ${package}已过滤."
+            elif [ "${mode}" = "whitelist" ]; then
+                log "info: ${package}已代理."
+            fi
+            continue
+        fi
+        if [ "$(grep "[0-9].*\." <<< ${package})" ];then
+            echo "${package}" >> ${appuid_file}
+            if [ "${mode}" = "blacklist" ]; then
+                log "info: ${package}已过滤."
+            elif [ "${mode}" = "whitelist" ]; then
+                log "info: ${package}已代理."
+            fi
+            continue
+        fi
         nhd=$(awk -F ">" '/^[0-9]+>$/{print $1}' <<< "${package}")
         if [ "${nhd}" != "" ]; then
             hd=${nhd}
@@ -234,7 +247,6 @@ find_packages_uid() {
             log "info: ${hd}${package}已代理."
         fi
     done
-    rm -f ${appuid_file}
     for uid in $(cat ${appuid_file}.tmp | sort -u); do
         echo ${uid} >> ${appuid_file}
     done
@@ -286,6 +298,20 @@ update_pre() {
 
 }
 
+reload() {
+    if [ "${Split}" == "true" ];then
+        cp -f ${template_file} ${temporary_config_file}.swp && echo "\n" >> ${temporary_config_file}.swp
+        sed -n -E '/^proxies:.*$/,$p' ${Clash_config_file} >> ${temporary_config_file}.swp
+        echo "\n" >> ${temporary_config_file}.swp
+        sed -i '/^[  ]*$/d' ${temporary_config_file}.swp
+        mv -f ${temporary_config_file}.swp ${temporary_config_file}
+    else
+        cp -f ${Clash_config_file} ${temporary_config_file}
+    fi
+
+    curl -X PUT -d '{"configs": ["${temporary_config_file}"]}' http://127.0.0.1:${Clash_ui_port}/configs?force=true
+}
+
 limit_clash() {
     if [ "${Cgroup_memory_limit}" == "" ]; then
         return
@@ -315,9 +341,7 @@ while getopts ":kfmpusl" signal; do
         update_pre
         ;;
     s)
-        if [ ${auto_updateSubcript} == "true" ]; then
-            curl -X PUT -d '{"configs": ["${temporary_config_file}"]}' http://127.0.0.1:${Clash_ui_port}/configs?force=true
-        fi
+        reload
         ;;
     k)
         if [ "${mode}" = "blacklist" ] || [ "${mode}" = "whitelist" ] || [ "${mode}" = "global" ]; then

@@ -22,6 +22,65 @@ update_file() {
         return 1
     fi
 }
+edit_tun() {
+    uidlist=""
+    ip4list=""
+    ip6list=""
+    
+    if [ "${Clash_auto_route}" != "true" ];then
+        addition="auto-route: true"
+    else
+        addition=""
+    fi
+    
+    if [ "${mode}" != "global" ]; then
+        apps=`cat ${filter_packages_file} | sort -u`
+
+        for appuid in ${apps} ; do
+            if [ "$(grep ":" <<< ${appuid})" ];then
+                ip6list="${ip6list}\n    - ${appuid}"
+                continue
+            fi
+            if [ "$(grep "[0-9].*\." <<< ${appuid})" ];then
+                ip4list="${ip4list}\n    - ${appuid}"
+                continue
+            fi
+            uidlist="${uidlist}\n    - ${appuid}"
+            if [ "${mode}" == "blacklist" ]; then
+                log "info: ${appuid}已排除."
+            else
+                log "info: ${appuid}已代理."
+            fi
+        done
+        
+        if [ "${mode}" == "blacklist" ]; then
+            if [ "${uidlist}" != "" ]; then
+                uid="\n  exclude-package:${uidlist}"
+            fi
+            if [ "${ip4list}" != "" ]; then
+                ip6="\n  inet6-route-exclude-address:${ip4list}"
+            fi
+            if [ "${ip6list}" != "" ]; then
+                ip4="\n  inet4-route-exclude-address:${ip6list}"
+            fi
+        elif [ "${mode}" == "whitelist" ] ; then
+            if [ "${uidlist}" != "" ]; then
+                uid="\n  include-package:${uidlist}"
+            fi
+            if [ "${ip6list}" != "" ]; then
+                ip6="\n  inet6-route-address:${ip6list}"
+            fi
+            if [ "${ip4list}" != "" ]; then
+                ip4="\n  inet4-route-address:${ip4list}"
+            fi
+        fi
+        addition="${addition}${uid}${ip4}${ip6}"
+    fi
+    if [ "$Clash_tun_status" == "true" ];then
+        sed -i "${Clash_tun_line}a\  ${addition}" ${temporary_config_file}
+        log "info: 已自动覆写clash配置"
+    fi
+}
 
 start_clash() {
     mkdir -p ${Clash_run_path}
@@ -36,13 +95,15 @@ start_clash() {
             exit 1
         fi
     fi
-    if [ ${mosdns} == "true" ];then
-        if [ ! -f "${Mosdns_bin_path}" ];then
-            log "err: 已开启 mosdns 拓展但未找到 mosdn 文件!"
-            exit 1
-        fi
-    fi
     
+    if [ "${Split}" == "true" ];then
+        cp -f ${template_file} ${temporary_config_file}.swp && echo "\n" >> ${temporary_config_file}.swp
+        sed -n -E '/^proxies:.*$/,$p' ${Clash_config_file} >> ${temporary_config_file}.swp
+        echo "\n" >> ${temporary_config_file}.swp
+        mv -f ${temporary_config_file}.swp ${temporary_config_file}
+    else
+        cp -f ${Clash_config_file} ${temporary_config_file}
+    fi
     
     if [ "${ipv6}" = "false" ] ; then
         for net in /proc/sys/net/ipv6/conf/{wlan*,*data*} ; do
@@ -62,6 +123,10 @@ start_clash() {
         done
         log "info: 已开启代理ipv6"
     fi
+    
+    if [ "${udp}" = "true" ] ; then
+        log "info: 已开启代理udp"
+    fi
 
     pid=`cat ${Clash_pid_file} 2> /dev/null`
     if (cat /proc/${pid}/cmdline | grep -q clash) ; then
@@ -72,18 +137,11 @@ start_clash() {
     if [ ${adguard} == "true" ];then
         pid=`cat ${Adguard_pid_file} 2> /dev/null`
         if (cat /proc/${pid}/cmdline | grep -q AdGuardHome) ; then
-            log "info: 检测到adguard home已启动,此次不启动."
+            log "info: 检测到AdGuardHome已启动,此次不启动."
             exit 1
         fi
     fi
     
-    if [ ${mosdns} == "true" ];then
-        pid=`cat ${Mosdns_pid_file} 2> /dev/null`
-        if (cat /proc/${pid}/cmdline | grep -q mosdns) ; then
-            log "info: 检测到mosdns已启动,此次不启动."
-            exit 1
-        fi
-    fi
     
     if [ "${Clash_tproxy_port}" == 0 ] || [ "${Clash_tproxy_port}" == ""  ]; then
         if [ "${Clash_tun_status}" != "true" ]; then
@@ -91,27 +149,24 @@ start_clash() {
             exit 1
         fi
     fi
-    
     if [ -f "${Clash_bin_path}" ] ; then
         mkdir -p ${Clash_run_path}
         chown ${Clash_user_group} ${Clash_bin_path}
         chmod ${Clash_permissions} ${Clash_bin_path}
         chown ${Clash_user_group} ${Adguard_bin_path}
         chmod ${Clash_permissions} ${Adguard_bin_path}
-        chown ${Clash_user_group} ${Mosdns_bin_path}
-        chmod ${Clash_permissions} ${Mosdns_bin_path}
         chown ${Clash_user_group} ${temporary_config_file}
         chmod 0644 ${temporary_config_file}
         rm -rf ${Clash_run_path}/root
         touch ${Clash_run_path}/root
         chmod 777 ${Clash_run_path}/root
-        if [ "${Geo_auto_update}" != "true"];then
+        if [ "${Geo_auto_update}" != "true" ];then
             if [ "${auto_updateGeoSite}" == "true" ]; then
                 echo "${update_geoXInterval} ${scripts_dir}/clash.tool -u" >> ${Clash_run_path}/root \
                 && log "info: 自动更新GeoX定时已开启."
             fi
         else
-            log "info: 核心已开启自动更新 模块不进行操作."
+            log "info: 核心已开启自动更新GeoX 模块不进行操作."
         fi
         if [ "${auto_updateSubcript}" == "true" ]; then
             echo "${update_subcriptInterval} ${scripts_dir}/clash.tool -s" >> ${Clash_run_path}/root \
@@ -177,15 +232,11 @@ start_clash() {
         log "info: 当前百度系免流ip:${baidumlip}"
         log "info: 当前腾讯系免流ip:${txmlip}"
     fi
-    if [ "${Split}" == "true" ];then
-        cp -f ${template_file} ${temporary_config_file}.swp && echo "\n" >> ${temporary_config_file}.swp
-        sed -n -E '/^proxies:.*$/,$p' ${Clash_config_file} >> ${temporary_config_file}.swp
-        echo "\n" >> ${temporary_config_file}.swp
-        sed -i '/^[  ]*$/d' ${temporary_config_file}.swp
-        mv -f ${temporary_config_file}.swp ${temporary_config_file}
-    else
-        cp -f ${Clash_config_file} ${temporary_config_file}
+    
+    if [ "$Clash_tun_status" == "true" ] || [ "${auto_config}" == "true" ];then
+        edit_tun
     fi
+    
     if [ ${ml} == "true" ];then
         sed -i "s/百度系免流ip/${baidumlip}/g" ${temporary_config_file}
         sed -i "s/腾讯系免流ip/${txmlip}/g" ${temporary_config_file}
@@ -209,10 +260,6 @@ start_clash() {
             ulimit -SHn 1000000
             if [ ${adguard} == "true" ];then
                 nohup ${busybox_path} setuidgid ${Clash_user_group} ${Adguard_bin_path} -w ${Clash_run_path} -c ${Adguard_config_file} --pidfile ${Adguard_pid_file} -l /data/clash/run/adg.log 2>&1 &
-            fi
-            if [ ${mosdns} == "true" ];then
-                nohup ${busybox_path} setuidgid ${Clash_user_group} ${Mosdns_bin_path} -d ${Clash_data_dir} -c ${Mosdns_config_file} 2>&1 &
-                echo "$(${busybox_path} pidof ${Mosdns_bin_path})">${Mosdns_pid_file}
             fi
             nohup ${busybox_path} setuidgid ${Clash_user_group} ${Clash_bin_path} -d ${Clash_data_dir} -f ${temporary_config_file} > /data/clash/run/kernel.log 2>&1 &
             echo "$(${busybox_path} pidof ${Clash_bin_path})">${Clash_pid_file}
@@ -246,10 +293,6 @@ start_clash() {
                 kill -15 `cat ${Adguard_pid_file}`
                 log "err: 已停止adguard home内核."
             fi
-            if [ ${mosdns} == "true" ];then
-                kill -15 `cat ${Mosdns_pid_file}`
-                log "err: 已停止mosdns内核."
-            fi
             rm -rf ${Clash_pid_file}
             exit 1
         fi
@@ -264,10 +307,6 @@ stop_clash() {
     if [ ${adguard} == "true" ];then
         kill -15 `cat ${Adguard_pid_file}`
         log "info: 已停止adguard home内核."
-    fi
-    if [ ${mosdns} == "true" ];then
-        kill -15 `cat ${Mosdns_pid_file}`
-        log "info: 已停止mosdns内核."
     fi
 }
 
